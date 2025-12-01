@@ -11,6 +11,7 @@ services:
       - ./app:/app/app
       - ./sam-3d-objects:/app/sam-3d-objects
       - ./sam_vit_h_4b8939.pth:/app/sam_vit_h_4b8939.pth
+      - ./storage:/app/storage
     environment:
       - POSTGRES_SERVER=postgres
       - POSTGRES_PORT=5432
@@ -72,6 +73,29 @@ services:
     ports:
       - "6379:6379"
     command: ["redis-server", "--save", "", "--appendonly", "no"]
+
+  worker:
+    build:
+      context: .
+      dockerfile: Dockerfile.backend
+    command: ["celery", "-A", "app.worker.tasks", "worker", "--loglevel=info"]
+    environment:
+      - POSTGRES_SERVER=postgres
+      - POSTGRES_PORT=5432
+      - POSTGRES_USER=forma3d
+      - POSTGRES_PASSWORD=forma3d
+      - POSTGRES_DB=forma3d
+      - REDIS_URL=redis://redis:6379/0
+      - NVIDIA_VISIBLE_DEVICES=all
+      - NVIDIA_DRIVER_CAPABILITIES=compute,utility
+    depends_on:
+      - postgres
+      - redis
+    volumes:
+      - ./app:/app/app
+      - ./sam-3d-objects:/app/sam-3d-objects
+      - ./sam_vit_h_4b8939.pth:/app/sam_vit_h_4b8939.pth
+      - ./storage:/app/storage
 
 volumes:
   postgres_data:

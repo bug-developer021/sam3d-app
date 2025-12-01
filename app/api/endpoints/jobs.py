@@ -1,11 +1,11 @@
 import os
 import shutil
 import uuid
-from datetime import datetime
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 import open3d as o3d
-from fastapi import APIRouter, BackgroundTasks, Depends, File, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 from sqlalchemy import select
@@ -14,10 +14,10 @@ from sqlalchemy.orm import selectinload
 
 from app.core.auth import get_current_user, get_user_id
 from app.core.config import settings
-from app.core.db import AsyncSessionLocal, get_session
+from app.core.db import get_session
 from app.core.rate_limit import rate_limit_upload_dependency
 from app.models.entities import Asset, AssetType, ProcessingJob, ProcessingStatus, Project, User
-from app.services.pipeline_service import pipeline_service
+from app.worker.tasks import enqueue_processing_job
 
 router = APIRouter()
 
@@ -35,7 +35,8 @@ ALLOWED_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp", ".bmp", ".tiff", ".tif"}
 
 
 def _validate_extension(filename: str) -> bool:
-    return os.path.splitext(filename)[1].lower() in ALLOWED_EXTENSIONS
+    base_name = Path(filename).name
+    return Path(base_name).suffix.lower() in ALLOWED_EXTENSIONS
 
 
 def _validate_content_type(content_type: Optional[str]) -> bool:
@@ -43,6 +44,15 @@ def _validate_content_type(content_type: Optional[str]) -> bool:
         return False
     base_type = content_type.split(";")[0].strip().lower()
     return base_type in ALLOWED_MIME_TYPES
+
+
+def _sanitize_filename(filename: str) -> str:
+    """Normalize user-supplied filenames to a safe, traversal-free value."""
+    base_name = Path(filename).name
+    ext = Path(base_name).suffix.lower()
+    if ext not in ALLOWED_EXTENSIONS:
+        raise HTTPException(status_code=400, detail=f"Unsupported extension for {filename}")
+    return f"{uuid.uuid4().hex}{ext}"
 
 
 async def _validate_file_size(file: UploadFile) -> int:
@@ -116,40 +126,6 @@ async def _save_input_assets(session: AsyncSession, project: Project, saved_path
         )
 
 
-async def process_job_task(job_id: uuid.UUID, image_paths: List[str]):
-    async with AsyncSessionLocal() as session:
-        job = await session.get(ProcessingJob, job_id)
-        if not job:
-            return
-        job.status = ProcessingStatus.PROCESSING
-        job.started_at = datetime.utcnow()
-        await session.commit()
-
-        try:
-            if len(image_paths) == 1:
-                pipeline_service.process_job(str(job_id), image_paths[0])
-            else:
-                pipeline_service.process_job_multiview(str(job_id), image_paths)
-
-            output_mesh = os.path.join(settings.OUTPUT_DIR, f"{job_id}.obj")
-            session.add(
-                Asset(
-                    project_id=job.project_id,
-                    type=AssetType.OUTPUT_MESH,
-                    uri=output_mesh,
-                    file_name=os.path.basename(output_mesh),
-                )
-            )
-            job.status = ProcessingStatus.COMPLETED
-            job.completed_at = datetime.utcnow()
-            job.error_message = None
-            await session.commit()
-        except Exception as exc:
-            job.status = ProcessingStatus.FAILED
-            job.error_message = str(exc)
-            await session.commit()
-
-
 upload_rate_limiter = rate_limit_upload_dependency()
 
 
@@ -158,7 +134,6 @@ upload_rate_limiter = rate_limit_upload_dependency()
     dependencies=[Depends(upload_rate_limiter)],
 )
 async def upload_images(
-    background_tasks: BackgroundTasks,
     files: List[UploadFile] = File(...),
     session: AsyncSession = Depends(get_session),
     user_id: Optional[str] = Depends(get_user_id),
@@ -171,7 +146,12 @@ async def upload_images(
     saved_paths: List[str] = []
     try:
         for file in files:
-            file_path = os.path.join(job_dir, file.filename)
+            safe_name = _sanitize_filename(file.filename)
+            file_path = os.path.join(job_dir, safe_name)
+            resolved_path = Path(file_path).resolve()
+            job_dir_resolved = Path(job_dir).resolve()
+            if not str(resolved_path).startswith(str(job_dir_resolved)):
+                raise HTTPException(status_code=400, detail="Invalid file path")
             with open(file_path, "wb") as buffer:
                 shutil.copyfileobj(file.file, buffer)
             saved_paths.append(file_path)
@@ -191,7 +171,7 @@ async def upload_images(
         shutil.rmtree(job_dir, ignore_errors=True)
         raise
 
-    background_tasks.add_task(process_job_task, job.id, saved_paths)
+    enqueue_processing_job(job.id, saved_paths)
 
     return {
         "job_id": str(job.id),

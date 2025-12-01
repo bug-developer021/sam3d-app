@@ -33,3 +33,4 @@ asyncpg
 alembic
 fastapi-limiter
 redis
+celery[redis]
