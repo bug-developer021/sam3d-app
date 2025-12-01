@@ -6,7 +6,7 @@
         "dev": "next dev",
         "build": "next build",
         "start": "next start",
-        "lint": "next lint"
+        "lint": "pnpm dlx eslint@9.14.0 -c eslint.config.mjs app components src"
     },
     "dependencies": {
         "@react-three/drei": "^10.7.7",
