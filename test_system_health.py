@@ -32,6 +32,7 @@ for key, value in DEFAULT_ENV.items():
 
 from app.core.config import settings  # noqa: E402
 from app.core.db import AsyncSessionLocal  # noqa: E402
+from app.core.security import hash_api_key  # noqa: E402
 from app.models.entities import User  # noqa: E402
 
 
@@ -49,10 +50,10 @@ async def check_postgres() -> bool:
 async def insert_dummy_user() -> Tuple[str, str]:
     """Insert a dummy user to ensure ORM writes succeed."""
     email = f"health-{uuid.uuid4().hex[:8]}@example.com"
-    api_key_hash = uuid.uuid4().hex
+    api_key = uuid.uuid4().hex
 
     async with AsyncSessionLocal() as session:
-        user = User(email=email, api_key_hash=api_key_hash)
+        user = User(email=email, api_key=hash_api_key(api_key))
         session.add(user)
         await session.commit()
         await session.refresh(user)

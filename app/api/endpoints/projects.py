@@ -1,4 +1,3 @@
-import uuid
 from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -7,9 +6,9 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from app.core.auth import get_user_id
 from app.core.db import get_session
-from app.models.entities import Asset, AssetType, Project
+from app.core.security import get_current_user
+from app.models.entities import Asset, AssetType, Project, User
 
 router = APIRouter()
 
@@ -64,15 +63,14 @@ async def _register_assets(session: AsyncSession, project: Project, assets: List
 async def create_project(
     payload: ProjectCreate,
     session: AsyncSession = Depends(get_session),
-    user_id: Optional[str] = Depends(get_user_id),
+    current_user: User = Depends(get_current_user),
 ):
     async with session.begin():
-        project = Project(name=payload.name, description=payload.description)
-        if user_id:
-            try:
-                project.user_id = uuid.UUID(user_id)
-            except ValueError:
-                raise HTTPException(status_code=400, detail="Invalid user id")
+        project = Project(
+            name=payload.name,
+            description=payload.description,
+            user_id=current_user.id,
+        )
         session.add(project)
         await session.flush()
         await _register_assets(session, project, payload.assets)
@@ -84,15 +82,10 @@ async def create_project(
 @router.get("/", response_model=List[ProjectResponse])
 async def list_projects(
     session: AsyncSession = Depends(get_session),
-    user_id: Optional[str] = Depends(get_user_id),
+    current_user: User = Depends(get_current_user),
 ):
     stmt = select(Project).options(selectinload(Project.assets))
-    if user_id:
-        try:
-            user_uuid = uuid.UUID(user_id)
-        except ValueError:
-            raise HTTPException(status_code=400, detail="Invalid user id")
-        stmt = stmt.where(Project.user_id == user_uuid)
+    stmt = stmt.where(Project.user_id == current_user.id)
     result = await session.execute(stmt)
     projects = result.scalars().all()
     return projects
@@ -102,19 +95,14 @@ async def list_projects(
 async def get_project(
     project_id: uuid.UUID,
     session: AsyncSession = Depends(get_session),
-    user_id: Optional[str] = Depends(get_user_id),
+    current_user: User = Depends(get_current_user),
 ):
     stmt = (
         select(Project)
         .options(selectinload(Project.assets))
         .where(Project.id == project_id)
     )
-    if user_id:
-        try:
-            user_uuid = uuid.UUID(user_id)
-        except ValueError:
-            raise HTTPException(status_code=400, detail="Invalid user id")
-        stmt = stmt.where(Project.user_id == user_uuid)
+    stmt = stmt.where(Project.user_id == current_user.id)
 
     result = await session.execute(stmt)
     project = result.scalars().first()

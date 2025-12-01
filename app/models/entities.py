@@ -39,6 +39,9 @@ class User(TimestampMixin, Base):
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
     )
     email: Mapped[Optional[str]] = mapped_column(String(255), unique=True, nullable=True)
+    api_key: Mapped[Optional[str]] = mapped_column(
+        String(255), unique=True, nullable=True, index=True
+    )
     api_key_hash: Mapped[Optional[str]] = mapped_column(String(255), nullable=True, index=True)
 
     projects: Mapped[List["Project"]] = relationship(

@@ -12,10 +12,10 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from app.core.auth import get_current_user, get_user_id
 from app.core.config import settings
 from app.core.db import get_session
 from app.core.rate_limit import rate_limit_upload_dependency
+from app.core.security import get_current_user
 from app.models.entities import Asset, AssetType, ProcessingJob, ProcessingStatus, Project, User
 from app.worker.tasks import enqueue_processing_job
 
@@ -87,23 +87,6 @@ async def _validate_files(files: List[UploadFile]) -> List[UploadFile]:
     return files
 
 
-async def _ensure_user(session: AsyncSession, user_id: Optional[str]) -> Optional[uuid.UUID]:
-    if not user_id:
-        return None
-    try:
-        user_uuid = uuid.UUID(user_id)
-    except ValueError:
-        raise HTTPException(status_code=400, detail="Invalid user id")
-
-    existing = await session.get(User, user_uuid)
-    if existing:
-        return existing.id
-
-    session.add(User(id=user_uuid))
-    await session.flush()
-    return user_uuid
-
-
 async def _create_processing_job(
     session: AsyncSession,
     project: Project,
@@ -136,7 +119,7 @@ upload_rate_limiter = rate_limit_upload_dependency()
 async def upload_images(
     files: List[UploadFile] = File(...),
     session: AsyncSession = Depends(get_session),
-    user_id: Optional[str] = Depends(get_user_id),
+    current_user: User = Depends(get_current_user),
 ):
     await _validate_files(files)
 
@@ -161,8 +144,10 @@ async def upload_images(
 
     try:
         async with session.begin():
-            owner_id = await _ensure_user(session, user_id)
-            project = Project(name=f"Job {os.path.basename(job_dir)}", user_id=owner_id)
+            project = Project(
+                name=f"Job {os.path.basename(job_dir)}",
+                user_id=current_user.id,
+            )
             session.add(project)
             await session.flush()
             await _save_input_assets(session, project, saved_paths)
@@ -171,13 +156,16 @@ async def upload_images(
         shutil.rmtree(job_dir, ignore_errors=True)
         raise
 
-    enqueue_processing_job(job.id, saved_paths)
+    task_id = enqueue_processing_job(job.id, saved_paths)
+    job.task_id = task_id
+    await session.commit()
 
     return {
         "job_id": str(job.id),
         "status": job.status.value,
         "project_id": str(project.id),
         "file_count": len(saved_paths),
+        "celery_task_id": task_id,
     }
 
 
@@ -187,7 +175,11 @@ class ScalingRequest(BaseModel):
 
 
 @router.get("/status/{job_id}")
-async def get_status(job_id: uuid.UUID, session: AsyncSession = Depends(get_session)):
+async def get_status(
+    job_id: uuid.UUID,
+    session: AsyncSession = Depends(get_session),
+    current_user: User = Depends(get_current_user),
+):
     stmt = (
         select(ProcessingJob)
         .options(selectinload(ProcessingJob.project))
@@ -195,7 +187,7 @@ async def get_status(job_id: uuid.UUID, session: AsyncSession = Depends(get_sess
     )
     result = await session.execute(stmt)
     job = result.scalars().first()
-    if not job:
+    if not job or job.project.user_id != current_user.id:
         raise HTTPException(status_code=404, detail="Job not found")
     return {
         "job_id": str(job.id),
@@ -208,14 +200,16 @@ async def get_status(job_id: uuid.UUID, session: AsyncSession = Depends(get_sess
 
 
 @router.get("/jobs")
-async def list_jobs(user_id: Optional[str] = Depends(get_user_id), session: AsyncSession = Depends(get_session)):
-    stmt = select(ProcessingJob).options(selectinload(ProcessingJob.project))
-    if user_id:
-        try:
-            user_uuid = uuid.UUID(user_id)
-        except ValueError:
-            raise HTTPException(status_code=400, detail="Invalid user id")
-        stmt = stmt.join(Project).where(Project.user_id == user_uuid)
+async def list_jobs(
+    session: AsyncSession = Depends(get_session),
+    current_user: User = Depends(get_current_user),
+):
+    stmt = (
+        select(ProcessingJob)
+        .join(Project)
+        .where(Project.user_id == current_user.id)
+        .options(selectinload(ProcessingJob.project))
+    )
     result = await session.execute(stmt.order_by(ProcessingJob.created_at.desc()))
     jobs = result.scalars().all()
     return [
@@ -230,7 +224,12 @@ async def list_jobs(user_id: Optional[str] = Depends(get_user_id), session: Asyn
 
 
 @router.get("/download/{job_id}")
-async def download_model(job_id: uuid.UUID, format: str = "obj", session: AsyncSession = Depends(get_session)):
+async def download_model(
+    job_id: uuid.UUID,
+    format: str = "obj",
+    session: AsyncSession = Depends(get_session),
+    current_user: User = Depends(get_current_user),
+):
     stmt = (
         select(ProcessingJob)
         .options(selectinload(ProcessingJob.project).selectinload(Project.assets))
@@ -238,7 +237,7 @@ async def download_model(job_id: uuid.UUID, format: str = "obj", session: AsyncS
     )
     result = await session.execute(stmt)
     job = result.scalars().first()
-    if not job:
+    if not job or job.project.user_id != current_user.id:
         raise HTTPException(status_code=404, detail="Job not found")
 
     if job.status not in {ProcessingStatus.COMPLETED, ProcessingStatus.PROCESSING}:
@@ -289,7 +288,7 @@ async def scale_model(
     job_id: uuid.UUID,
     request: ScalingRequest,
     session: AsyncSession = Depends(get_session),
-    user: Optional[Dict[str, Any]] = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
 ):
     stmt = (
         select(ProcessingJob)
@@ -298,7 +297,7 @@ async def scale_model(
     )
     result = await session.execute(stmt)
     job = result.scalars().first()
-    if not job:
+    if not job or job.project.user_id != current_user.id:
         raise HTTPException(status_code=404, detail="Job not found")
     if job.status not in {ProcessingStatus.COMPLETED, ProcessingStatus.PROCESSING}:
         raise HTTPException(status_code=400, detail="Job not completed")
