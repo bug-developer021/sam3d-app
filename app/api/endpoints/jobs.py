@@ -179,13 +179,17 @@ async def upload_images(
         shutil.rmtree(job_dir, ignore_errors=True)
         raise HTTPException(status_code=500, detail=f"Failed to save files: {exc}")
 
-    async with session.begin():
-        owner_id = await _ensure_user(session, user_id)
-        project = Project(name=f"Job {os.path.basename(job_dir)}", user_id=owner_id)
-        session.add(project)
-        await session.flush()
-        await _save_input_assets(session, project, saved_paths)
-        job = await _create_processing_job(session, project)
+    try:
+        async with session.begin():
+            owner_id = await _ensure_user(session, user_id)
+            project = Project(name=f"Job {os.path.basename(job_dir)}", user_id=owner_id)
+            session.add(project)
+            await session.flush()
+            await _save_input_assets(session, project, saved_paths)
+            job = await _create_processing_job(session, project)
+    except Exception:
+        shutil.rmtree(job_dir, ignore_errors=True)
+        raise
 
     background_tasks.add_task(process_job_task, job.id, saved_paths)
 
