@@ -5,7 +5,8 @@ import { Canvas, useLoader } from "@react-three/fiber";
 import { OrbitControls, Stage, Html, useProgress, useGLTF } from "@react-three/drei";
 import { OBJLoader } from "three/examples/jsm/loaders/OBJLoader";
 import { Loader2, AlertCircle } from "lucide-react";
-import { API_URL } from "../lib/api";
+import { scaleModel } from "@/services/api";
+import { useAuth } from "@/hooks/useAuth";
 
 function OBJModel({ url }) {
   const obj = useLoader(OBJLoader, url);
@@ -57,29 +58,28 @@ export default function ModelViewer({ modelUrl, jobId }) {
   const [isScaling, setIsScaling] = useState(false);
   const [refreshKey, setRefreshKey] = useState(0);
   const [feedback, setFeedback] = useState(null);
+  const { apiKey } = useAuth();
 
   if (!modelUrl) return null;
 
   const handleScale = async () => {
-    if (!jobId) return;
+    if (!jobId || !apiKey) {
+      setFeedback("API key required to scale.");
+      return;
+    }
     setIsScaling(true);
     try {
-      const res = await fetch(`${API_URL}/api/v1/jobs/${jobId}/scale`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ target_dimension: parseFloat(targetSize), axis }),
-      });
-
-      if (res.ok) {
-        setRefreshKey((prev) => prev + 1);
-        setShowScale(false);
-        setFeedback("Scale applied");
-      } else {
-        setFeedback("Scaling failed");
-      }
+      await scaleModel(
+        jobId,
+        { target_dimension: parseFloat(targetSize), axis },
+        apiKey
+      );
+      setRefreshKey((prev) => prev + 1);
+      setShowScale(false);
+      setFeedback("Scale applied");
     } catch (e) {
       console.error(e);
-      setFeedback("Scaling error");
+      setFeedback(e?.status === 401 ? "Unauthorized" : "Scaling error");
     } finally {
       setIsScaling(false);
     }

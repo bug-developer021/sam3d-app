@@ -2,7 +2,6 @@
 
 import React, { useCallback, useState } from "react";
 import { useDropzone } from "react-dropzone";
-import axios from "axios";
 import {
   Upload,
   Loader2,
@@ -11,7 +10,12 @@ import {
   CheckCircle,
   Clock3,
 } from "lucide-react";
-import { API_URL } from "../lib/api";
+import {
+  createProject,
+  uploadImages,
+  startProcessing,
+} from "@/services/api";
+import { useAuth } from "@/hooks/useAuth";
 
 export default function UploadZone({ onUploadComplete }) {
   const [uploading, setUploading] = useState(false);
@@ -19,51 +23,57 @@ export default function UploadZone({ onUploadComplete }) {
   const [uploadProgress, setUploadProgress] = useState(null);
   const [selectedFiles, setSelectedFiles] = useState([]);
   const [lastJobId, setLastJobId] = useState(null);
+  const [projectName, setProjectName] = useState("");
+  const { apiKey, setApiKey } = useAuth();
 
   const onDrop = useCallback(
     async (acceptedFiles) => {
       if (!acceptedFiles.length) return;
+
+      if (!apiKey) {
+        setError("API key required. Add your X-API-Key to continue.");
+        return;
+      }
 
       setSelectedFiles(acceptedFiles);
       setUploading(true);
       setError(null);
       setUploadProgress(0);
 
-      const formData = new FormData();
-      acceptedFiles.forEach((file) => formData.append("files", file));
-
       try {
-        const response = await axios.post(
-          `${API_URL}/api/v1/jobs/upload`,
-          formData,
-          {
-            headers: {
-              "Content-Type": "multipart/form-data",
-            },
-            onUploadProgress: (event) => {
-              if (!event.total) return;
-              const percent = Math.round((event.loaded * 100) / event.total);
-              setUploadProgress(percent);
-            },
-          }
-        );
+        let projectId = null;
+        if (projectName.trim()) {
+          const project = await createProject(projectName.trim(), "", apiKey);
+          projectId = project?.id;
+        }
 
-        setLastJobId(response.data?.job_id || null);
+        const response = await uploadImages(projectId, acceptedFiles, apiKey);
+
+        // startProcessing is a no-op if backend auto-enqueues during upload
+        try {
+          if (projectId && response?.project_id) {
+            await startProcessing(projectId, apiKey);
+          }
+        } catch (processErr) {
+          console.debug("Process enqueue skipped", processErr);
+        }
+
+        setLastJobId(response?.job_id || null);
         setSelectedFiles([]);
         if (onUploadComplete) onUploadComplete();
       } catch (err) {
         console.error("Upload failed", err);
-        const detail = err?.response?.data?.detail;
+        const detail = err?.response?.data?.detail || err?.message || err?.detail;
         const message = Array.isArray(detail)
           ? detail.map((d) => d.msg || d).join(", ")
-          : detail || err.message || "Upload failed. Please try again.";
+          : detail || "Upload failed. Please try again.";
         setError(message);
       } finally {
         setUploading(false);
         setUploadProgress(null);
       }
     },
-    [onUploadComplete]
+    [apiKey, onUploadComplete, projectName]
   );
 
   const { getRootProps, getInputProps, isDragActive } = useDropzone({
@@ -78,6 +88,37 @@ export default function UploadZone({ onUploadComplete }) {
 
   return (
     <div className="w-full rounded-3xl border border-white/5 bg-white/[0.02] p-8 backdrop-blur-sm transition hover:bg-white/[0.04]">
+      <div className="mb-6 grid gap-4 sm:grid-cols-2">
+        <div className="space-y-2">
+          <label className="text-xs uppercase tracking-wide text-slate-400">Project name</label>
+          <input
+            value={projectName}
+            onChange={(e) => setProjectName(e.target.value)}
+            placeholder="Optional: e.g. Ceramic Vase"
+            className="w-full rounded-xl border border-white/10 bg-black/30 px-3 py-2 text-sm text-white placeholder:text-slate-500 focus:border-violet-500 focus:outline-none"
+            disabled={uploading}
+          />
+        </div>
+        <div className="space-y-2">
+          <label className="text-xs uppercase tracking-wide text-slate-400">API Key</label>
+          <div className="flex gap-2">
+            <input
+              value={apiKey || ""}
+              onChange={(e) => {
+                setError(null);
+                setApiKey(e.target.value);
+              }}
+              placeholder="Enter your X-API-Key"
+              className="w-full rounded-xl border border-white/10 bg-black/30 px-3 py-2 text-sm text-white placeholder:text-slate-500 focus:border-violet-500 focus:outline-none"
+              disabled={uploading}
+            />
+          </div>
+          <p className="text-xs text-slate-500">
+            Stored locally only. Required for create/upload/process/download operations.
+          </p>
+        </div>
+      </div>
+
       <div className="mb-6 flex items-center justify-between gap-2">
         <div>
           <h3 className="text-xl font-medium text-white">

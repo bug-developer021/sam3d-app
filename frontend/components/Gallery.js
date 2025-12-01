@@ -1,7 +1,6 @@
 "use client";
 
 import React, { useEffect, useMemo, useState } from "react";
-import axios from "axios";
 import {
   Download,
   Box,
@@ -13,7 +12,8 @@ import {
   Filter,
 } from "lucide-react";
 import ModelViewer from "./ModelViewer";
-import { API_URL } from "../lib/api";
+import { listJobs, downloadMesh } from "@/services/api";
+import { useAuth } from "@/hooks/useAuth";
 
 const STATUS_PROGRESS = {
   queued: 18,
@@ -39,15 +39,34 @@ export default function Gallery({ refreshTrigger }) {
   const [filter, setFilter] = useState("all");
   const [lastUpdated, setLastUpdated] = useState(null);
   const [manualRefresh, setManualRefresh] = useState(false);
+  const [authError, setAuthError] = useState(null);
+  const { apiKey } = useAuth();
 
   const fetchJobs = async (isManual = false) => {
+    if (!apiKey) {
+      setAuthError("API key required to load your jobs.");
+      setLoading(false);
+      return;
+    }
     if (isManual) setManualRefresh(true);
     try {
-      const response = await axios.get(`${API_URL}/api/v1/jobs/jobs`);
-      setJobs(response.data || {});
+      const data = await listJobs(apiKey);
+      const normalized = Array.isArray(data)
+        ? data.reduce((acc, item) => {
+            acc[item.job_id] = item;
+            return acc;
+          }, {})
+        : data || {};
+      setJobs(normalized);
       setLastUpdated(new Date());
+      setAuthError(null);
     } catch (error) {
       console.error("Failed to fetch jobs", error);
+      if (error?.status === 401) {
+        setAuthError("Unauthorized. Check your API key.");
+      } else {
+        setAuthError(error?.message || "Unable to fetch jobs.");
+      }
     } finally {
       setLoading(false);
       setManualRefresh(false);
@@ -59,7 +78,7 @@ export default function Gallery({ refreshTrigger }) {
     const interval = setInterval(fetchJobs, 5000);
     return () => clearInterval(interval);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [refreshTrigger]);
+  }, [refreshTrigger, apiKey]);
 
   const filteredJobs = useMemo(() => {
     const entries = Object.entries(jobs);
@@ -147,7 +166,7 @@ export default function Gallery({ refreshTrigger }) {
           </div>
         )}
 
-        {!loading && (
+        {!loading && !authError && (
           <div className="grid gap-6 md:grid-cols-2 xl:grid-cols-3">
             {filteredJobs.map(([jobId, job]) => (
               <JobCard
@@ -170,6 +189,13 @@ export default function Gallery({ refreshTrigger }) {
             </div>
             <p className="mt-4 text-sm text-slate-400">No generations yet.</p>
             <p className="text-xs text-slate-500">Upload photos to start building.</p>
+          </div>
+        )}
+
+        {authError && (
+          <div className="flex items-center gap-2 rounded-2xl border border-red-500/20 bg-red-500/10 px-4 py-3 text-sm text-red-200">
+            <AlertCircle className="h-4 w-4" />
+            <div>{authError}</div>
           </div>
         )}
       </div>
@@ -203,14 +229,55 @@ function JobCard({ jobId, job, onView }) {
     job.status === "completed" || job.status === "completed_partial";
   const defaultFormat = job.result ? job.result.split(".").pop() : "obj";
   const [format, setFormat] = useState(defaultFormat || "obj");
+  const [downloading, setDownloading] = useState(false);
+  const [localError, setLocalError] = useState(null);
+  const { apiKey } = useAuth();
 
   useEffect(() => {
     setFormat(defaultFormat || "obj");
   }, [defaultFormat]);
 
-  const downloadUrl = `${API_URL}/api/v1/jobs/download/${jobId}?format=${format}`;
-  const viewUrl = `${downloadUrl}#model.${format}`;
   const progressWidth = `${STATUS_PROGRESS[job.status] || 12}%`;
+
+  const handleDownload = async () => {
+    if (!ready) return;
+    if (!apiKey) {
+      setLocalError("API key required to download.");
+      return;
+    }
+    setDownloading(true);
+    setLocalError(null);
+    try {
+      const blob = await downloadMesh(jobId, format, apiKey);
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = `job-${jobId}.${format}`;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      setLocalError(err?.status === 401 ? "Unauthorized" : err?.message || "Download failed");
+    } finally {
+      setDownloading(false);
+    }
+  };
+
+  const handleView = async () => {
+    if (!ready) return;
+    if (!apiKey) {
+      setLocalError("API key required to preview.");
+      return;
+    }
+    try {
+      const blob = await downloadMesh(jobId, format, apiKey);
+      const url = URL.createObjectURL(blob);
+      onView(url);
+    } catch (err) {
+      setLocalError(err?.status === 401 ? "Unauthorized" : err?.message || "Preview failed");
+    }
+  };
 
   return (
     <div className="group relative flex h-full flex-col justify-between rounded-3xl border border-white/5 bg-white/[0.02] p-6 transition hover:border-white/10 hover:bg-white/[0.04]">
@@ -273,7 +340,7 @@ function JobCard({ jobId, job, onView }) {
 
         <div className="flex gap-2">
           <button
-            onClick={() => onView(viewUrl)}
+            onClick={handleView}
             disabled={!ready}
             className="rounded-lg p-2 text-slate-400 transition hover:bg-white/5 hover:text-white disabled:opacity-30"
             title="View 3D Model"
@@ -281,15 +348,21 @@ function JobCard({ jobId, job, onView }) {
             <Eye className="h-4 w-4" />
           </button>
           <button
-            onClick={() => window.location.assign(downloadUrl)}
-            disabled={!ready}
+            onClick={handleDownload}
+            disabled={!ready || downloading}
             className="rounded-lg p-2 text-violet-400 transition hover:bg-violet-500/10 hover:text-violet-300 disabled:opacity-30"
             title="Download"
           >
-            <Download className="h-4 w-4" />
+            <Download className={`h-4 w-4 ${downloading ? "animate-pulse" : ""}`} />
           </button>
         </div>
       </div>
+
+      {localError && (
+        <div className="mt-3 rounded-lg border border-red-500/20 bg-red-500/10 px-3 py-2 text-xs text-red-200">
+          {localError}
+        </div>
+      )}
     </div>
   );
 }
