@@ -1,0 +1,13 @@
+{
+  "c88cdb78-1a89-40c0-834e-d5dbc17fd5d7": {
+    "status": "failed",
+    "result": null,
+    "error": "Output not generated"
+  },
+  "f45523bb-b78d-4558-b6d8-e73c8cc53303": {
+    "status": "completed",
+    "result": "C:\\Users\\kutlu\\OneDrive\\Desktop\\sam-3d-architecture\\storage\\outputs\\f45523bb-b78d-4558-b6d8-e73c8cc53303.obj",
+    "error": null,
+    "user_id": null
+  }
+}

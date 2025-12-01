@@ -1,0 +1,27 @@
+--extra-index-url https://miropsota.github.io/torch_packages_builder
+--extra-index-url https://download.pytorch.org/whl/cu121
+
+# PyTorch with CUDA 12.1 support
+torch==2.5.1+cu121
+torchvision==0.20.1+cu121
+
+# pytorch3d - requires pre-built wheels for Windows
+# Install matching version from miropsota's wheel builder which has Windows CUDA builds
+# Format: pytorch3d==0.7.8+pt{torch_version}cu{cuda_version}
+pytorch3d==0.7.8+pt2.5.1cu121
+uvicorn
+python-multipart
+numpy
+opencv-python
+Pillow
+open3d
+trimesh
+scipy
+matplotlib
+requests
+tqdm
+PyJWT
+pydantic-settings
+hydra-core
+omegaconf
+fastapi
