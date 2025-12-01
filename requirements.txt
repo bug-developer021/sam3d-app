@@ -15,6 +15,8 @@ numpy
 opencv-python
 Pillow
 open3d
+pymeshlab
+xatlas
 trimesh
 scipy
 matplotlib
@@ -25,3 +27,10 @@ pydantic-settings
 hydra-core
 omegaconf
 fastapi
+segment-anything
+SQLAlchemy>=2.0
+asyncpg
+alembic
+fastapi-limiter
+redis
+celery[redis]
