@@ -1,4 +1,4 @@
-version: '3.8'
+version: '3.9'
 
 services:
   backend:
@@ -11,6 +11,18 @@ services:
       - ./app:/app/app
       - ./sam-3d-objects:/app/sam-3d-objects
       - ./sam_vit_h_4b8939.pth:/app/sam_vit_h_4b8939.pth
+    environment:
+      - POSTGRES_SERVER=postgres
+      - POSTGRES_PORT=5432
+      - POSTGRES_USER=forma3d
+      - POSTGRES_PASSWORD=forma3d
+      - POSTGRES_DB=forma3d
+      - REDIS_URL=redis://redis:6379/0
+      - NVIDIA_VISIBLE_DEVICES=all
+      - NVIDIA_DRIVER_CAPABILITIES=compute,utility
+    depends_on:
+      - postgres
+      - redis
     deploy:
       resources:
         reservations:
@@ -18,9 +30,6 @@ services:
             - driver: nvidia
               count: 1
               capabilities: [ gpu ]
-    environment:
-      - NVIDIA_VISIBLE_DEVICES=all
-      - NVIDIA_DRIVER_CAPABILITIES=compute,utility
 
   frontend:
     build:
@@ -32,3 +41,38 @@ services:
       - NEXT_PUBLIC_API_URL=http://localhost:8000
     depends_on:
       - backend
+
+  postgres:
+    image: postgres:15
+    restart: unless-stopped
+    environment:
+      - POSTGRES_USER=forma3d
+      - POSTGRES_PASSWORD=forma3d
+      - POSTGRES_DB=forma3d
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+  pgadmin:
+    image: dpage/pgadmin4
+    restart: unless-stopped
+    environment:
+      - PGADMIN_DEFAULT_EMAIL=admin@example.com
+      - PGADMIN_DEFAULT_PASSWORD=admin
+    ports:
+      - "5050:80"
+    depends_on:
+      - postgres
+    volumes:
+      - pgadmin_data:/var/lib/pgadmin
+
+  redis:
+    image: redis:7
+    ports:
+      - "6379:6379"
+    command: ["redis-server", "--save", "", "--appendonly", "no"]
+
+volumes:
+  postgres_data:
+  pgadmin_data:

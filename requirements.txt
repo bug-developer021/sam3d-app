@@ -25,3 +25,8 @@ pydantic-settings
 hydra-core
 omegaconf
 fastapi
+SQLAlchemy>=2.0
+asyncpg
+alembic
+fastapi-limiter
+redis

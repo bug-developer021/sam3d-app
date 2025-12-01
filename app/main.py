@@ -9,6 +9,7 @@ from app.core.logging_config import (
     generate_request_id,
     setup_logging,
 )
+from app.core.rate_limit import init_rate_limiter
 
 # Configure structured logging for the whole application
 setup_logging(settings.LOG_LEVEL)
@@ -31,6 +32,7 @@ Forma3D API for converting user photos into downloadable 3D assets.
 
 tags_metadata = [
     {"name": "jobs", "description": "Upload photos, track reconstruction, and download 3D assets."},
+    {"name": "projects", "description": "Manage Forma3D projects and registered assets."},
     {"name": "health", "description": "Liveness and readiness probes for orchestration."},
 ]
 
@@ -43,6 +45,12 @@ app = FastAPI(
     redoc_url=settings.REDOC_URL,
     openapi_url=settings.OPENAPI_URL,
 )
+
+
+@app.on_event("startup")
+async def startup_event():
+    await init_rate_limiter()
+
 
 # Configure CORS middleware to allow frontend to communicate with backend
 app.add_middleware(
@@ -59,6 +67,7 @@ app.add_middleware(
 )
 
 app.include_router(api_router, prefix=settings.API_V1_STR)
+
 
 @app.middleware("http")
 async def request_logging_middleware(request: Request, call_next):
@@ -104,9 +113,11 @@ async def request_logging_middleware(request: Request, call_next):
             ),
         )
 
+
 @app.get("/")
 def root():
     return {"message": "Forma3D API is running"}
+
 
 @app.get("/health")
 def health_check():
@@ -117,19 +128,20 @@ def health_check():
         "version": "1.0.0"
     }
 
+
 @app.get("/ready")
 def readiness_check():
     """Readiness check - verifies the service is ready to accept traffic."""
     import os
-    
+
     # Check if critical directories exist
     checks = {
         "upload_dir": os.path.exists(settings.UPLOAD_DIR),
         "output_dir": os.path.exists(settings.OUTPUT_DIR),
     }
-    
+
     all_ready = all(checks.values())
-    
+
     return {
         "status": "ready" if all_ready else "not_ready",
         "checks": checks
