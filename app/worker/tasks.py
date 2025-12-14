@@ -28,11 +28,11 @@ async def _process_job(job_id: uuid.UUID, image_paths: List[str]) -> None:
 
         try:
             if len(image_paths) == 1:
-                pipeline_service.process_job(str(job_id), image_paths[0])
+                result = pipeline_service.process_job(str(job_id), image_paths[0]) or {}
             else:
-                pipeline_service.process_job_multiview(str(job_id), image_paths)
+                result = pipeline_service.process_job_multiview(str(job_id), image_paths) or {}
 
-            output_mesh = os.path.join(settings.OUTPUT_DIR, f"{job_id}.obj")
+            output_mesh = result.get("mesh_path") or os.path.join(settings.OUTPUT_DIR, f"{job_id}.obj")
             session.add(
                 Asset(
                     project_id=job.project_id,
@@ -41,6 +41,17 @@ async def _process_job(job_id: uuid.UUID, image_paths: List[str]) -> None:
                     file_name=os.path.basename(output_mesh),
                 )
             )
+
+            mask_preview = result.get("mask_path")
+            if mask_preview:
+                session.add(
+                    Asset(
+                        project_id=job.project_id,
+                        type=AssetType.TEXTURE,
+                        uri=mask_preview,
+                        file_name=os.path.basename(mask_preview),
+                    )
+                )
             job.status = ProcessingStatus.COMPLETED
             job.completed_at = datetime.utcnow()
             job.error_message = None

@@ -208,7 +208,7 @@ async def list_jobs(
         select(ProcessingJob)
         .join(Project)
         .where(Project.user_id == current_user.id)
-        .options(selectinload(ProcessingJob.project))
+        .options(selectinload(ProcessingJob.project).selectinload(Project.assets))
     )
     result = await session.execute(stmt.order_by(ProcessingJob.created_at.desc()))
     jobs = result.scalars().all()
@@ -218,6 +218,7 @@ async def list_jobs(
             "project_id": str(job.project_id),
             "status": job.status.value,
             "error": job.error_message,
+            "has_mask": any(asset.type == AssetType.TEXTURE for asset in job.project.assets),
         }
         for job in jobs
     ]
@@ -281,6 +282,33 @@ async def download_model(
         raise
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Conversion failed: {exc}")
+
+
+@router.get("/mask/{job_id}")
+async def download_mask(
+    job_id: uuid.UUID,
+    session: AsyncSession = Depends(get_session),
+    current_user: User = Depends(get_current_user),
+):
+    stmt = (
+        select(ProcessingJob)
+        .options(selectinload(ProcessingJob.project).selectinload(Project.assets))
+        .where(ProcessingJob.id == job_id)
+    )
+    result = await session.execute(stmt)
+    job = result.scalars().first()
+    if not job or job.project.user_id != current_user.id:
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    preview_assets = [a for a in job.project.assets if a.type == AssetType.TEXTURE]
+    if not preview_assets:
+        raise HTTPException(status_code=404, detail="Mask preview not available")
+
+    mask_path = preview_assets[0].uri
+    if not os.path.exists(mask_path):
+        raise HTTPException(status_code=404, detail="Mask file missing")
+
+    return FileResponse(mask_path, filename=os.path.basename(mask_path))
 
 
 @router.post("/jobs/{job_id}/scale")

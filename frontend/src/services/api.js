@@ -95,6 +95,11 @@ export async function downloadMesh(jobId, format = "obj", apiKey) {
   return blob;
 }
 
+export async function downloadMask(jobId, apiKey) {
+  const path = `${ENDPOINTS.jobs}/mask/${jobId}`;
+  return apiFetch(path, { method: "GET", apiKey, responseType: "blob" });
+}
+
 export async function listJobs(apiKey) {
   const path = `${ENDPOINTS.jobs}/jobs`;
   return apiFetch(path, { method: "GET", apiKey });

@@ -37,12 +37,12 @@ class PipelineService:
         output_base = os.path.join(settings.OUTPUT_DIR, job_id)
         
         try:
-            self.pipeline.run(image_path, output_base)
+            result = self.pipeline.run(image_path, output_base)
             logger.info(f"Job {job_id} completed successfully.")
-            # We could update some status file or db here
+            return result
         except Exception as e:
             logger.error(f"Job {job_id} failed: {e}")
-            # Handle failure status
+            return {}
 
     def process_job_multiview(self, job_id: str, image_paths: list):
         """
@@ -53,9 +53,11 @@ class PipelineService:
         output_base = os.path.join(settings.OUTPUT_DIR, job_id)
         
         try:
-            self.pipeline.run_multiview(image_paths, output_base)
+            result = self.pipeline.run_multiview(image_paths, output_base)
             logger.info(f"Job {job_id} completed successfully.")
+            return result
         except Exception as e:
             logger.error(f"Job {job_id} failed: {e}")
+            return {}
 
 pipeline_service = PipelineService()

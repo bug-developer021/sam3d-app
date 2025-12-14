@@ -139,7 +139,7 @@ class Forma3DPipeline:
             h, w = mask.shape
             mask[h // 4 : 3 * h // 4, w // 4 : 3 * w // 4] = True
             return mask
-        
+
         if self.mask_generator:
             masks = self.mask_generator.generate(image)
             # Simple heuristic: take the largest mask that is somewhat central
@@ -147,11 +147,27 @@ class Forma3DPipeline:
             if not masks:
                 logger.warning("No masks found.")
                 return None
-            
+
             largest_mask = max(masks, key=lambda x: x['area'])
             return largest_mask['segmentation']
         else:
             logger.warning("SAM not initialized.")
+            return None
+
+    def _save_mask_visualization(self, image_path, mask, output_path):
+        """Persist a mask overlay for front-end preview."""
+        try:
+            image = Image.open(image_path).convert("RGBA")
+            mask_alpha = (mask.astype(np.uint8)) * 180
+            overlay = np.zeros((mask.shape[0], mask.shape[1], 4), dtype=np.uint8)
+            overlay[..., 0] = 255  # red tint
+            overlay[..., 3] = mask_alpha
+            overlay_img = Image.fromarray(overlay, mode="RGBA")
+            composed = Image.alpha_composite(image, overlay_img)
+            composed.save(output_path)
+            return output_path
+        except Exception as e:
+            logger.warning("Failed to write mask visualization: %s", e)
             return None
 
     def convert_to_mesh(self, ply_path_or_pcd, output_mesh_path):
@@ -182,20 +198,20 @@ class Forma3DPipeline:
         if self.inference is None or self.stub_mode:
             logger.info("Using stub reconstruction; inference not initialized.")
             return self._write_stub_point_cloud(output_path)
-        
+
         logger.info("Reconstructing 3D model from %s...", image_path)
         image = load_image(image_path)
-        
+
         try:
             output = self.inference(image, mask, seed=42)
-            
+
             # Save Gaussian Splats
             ply_path = output_path if output_path.endswith(".ply") else output_path + ".ply"
             output["gs"].save_ply(ply_path)
             logger.info("Saved Gaussian Splats to %s", ply_path)
-            
+
             return ply_path
-            
+
         except Exception as e:
             logger.error("Reconstruction failed: %s", e)
             return None
@@ -236,42 +252,55 @@ class Forma3DPipeline:
     def run(self, image_path, output_path):
         if not os.path.exists(image_path):
             logger.error("Image %s not found.", image_path)
-            return
+            return {}
+
+        result = {"mask_path": None, "ply_path": None, "mesh_path": None}
 
         mask = self.segment(image_path)
         if mask is not None:
+            mask_preview_path = output_path + "_mask.png"
+            result["mask_path"] = self._save_mask_visualization(image_path, mask, mask_preview_path)
+
             ply_path = self.reconstruct(image_path, mask, output_path)
+            result["ply_path"] = ply_path
             if ply_path:
                 # Determine mesh output path
                 mesh_path = output_path.replace(".ply", ".obj")
                 if not mesh_path.endswith(".obj"):
                     mesh_path += ".obj"
-                
+
                 self.convert_to_mesh(ply_path, mesh_path)
-                
+                result["mesh_path"] = mesh_path
+
                 # Optimize
                 self.optimize_mesh(mesh_path)
         else:
             logger.error("Segmentation failed, skipping reconstruction.")
 
+        return result
+
     def run_multiview(self, image_paths, output_path):
         import fusion # Import here to avoid circular dependency if any, or just lazy load
-        
+
         pcds = []
         temp_dir = os.path.dirname(output_path)
-        
+        preview_masks = []
+
         for i, img_path in enumerate(image_paths):
             if not os.path.exists(img_path):
                 logger.warning("Image %s not found, skipping.", img_path)
                 continue
-                
+
             logger.info("Processing view %s/%s: %s", i + 1, len(image_paths), img_path)
             mask = self.segment(img_path)
             if mask is not None:
                 # Use a temp path for individual view PLYs
                 view_output_base = os.path.join(temp_dir, f"view_{i}")
+                preview_path = view_output_base + "_mask.png"
+                preview_masks.append(self._save_mask_visualization(img_path, mask, preview_path))
+
                 ply_path = self.reconstruct(img_path, mask, view_output_base)
-                
+
                 if ply_path:
                     pcd = o3d.io.read_point_cloud(ply_path)
                     pcds.append(pcd)
@@ -280,28 +309,34 @@ class Forma3DPipeline:
 
         if not pcds:
             logger.error("No 3D models generated from inputs.")
-            return
+            return {}
 
         logger.info("Fusing %s point clouds...", len(pcds))
         fused_pcd = fusion.fuse_point_clouds(pcds)
-        
+
+        result = {"mask_path": preview_masks[0] if preview_masks else None, "mesh_path": None, "ply_path": None}
+
         if fused_pcd:
             # Save fused point cloud
             fused_ply_path = output_path if output_path.endswith(".ply") else output_path + ".ply"
             o3d.io.write_point_cloud(fused_ply_path, fused_pcd)
             logger.info("Saved fused point cloud to %s", fused_ply_path)
-            
+            result["ply_path"] = fused_ply_path
+
             # Convert to mesh
             mesh_path = output_path.replace(".ply", ".obj")
             if not mesh_path.endswith(".obj"):
                 mesh_path += ".obj"
-            
+
             self.convert_to_mesh(fused_pcd, mesh_path)
-            
+            result["mesh_path"] = mesh_path
+
             # Optimize
             self.optimize_mesh(mesh_path)
         else:
             logger.error("Fusion failed.")
+
+        return result
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Forma3D Pipeline")

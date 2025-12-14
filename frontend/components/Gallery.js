@@ -12,7 +12,7 @@ import {
   Filter,
 } from "lucide-react";
 import ModelViewer from "./ModelViewer";
-import { listJobs, downloadMesh } from "@/services/api";
+import { listJobs, downloadMesh, downloadMask } from "@/services/api";
 import { useAuth } from "@/hooks/useAuth";
 
 const STATUS_PROGRESS = {
@@ -36,6 +36,7 @@ export default function Gallery({ refreshTrigger }) {
   const [loading, setLoading] = useState(true);
   const [selectedModel, setSelectedModel] = useState(null);
   const [selectedJobId, setSelectedJobId] = useState(null);
+  const [selectedMask, setSelectedMask] = useState(null);
   const [filter, setFilter] = useState("all");
   const [lastUpdated, setLastUpdated] = useState(null);
   const [manualRefresh, setManualRefresh] = useState(false);
@@ -173,8 +174,9 @@ export default function Gallery({ refreshTrigger }) {
                 key={jobId}
                 jobId={jobId}
                 job={job}
-                onView={(url) => {
-                  setSelectedModel(url);
+                onView={({ modelUrl, maskUrl }) => {
+                  setSelectedModel(modelUrl);
+                  setSelectedMask(maskUrl || null);
                   setSelectedJobId(jobId);
                 }}
               />
@@ -208,6 +210,7 @@ export default function Gallery({ refreshTrigger }) {
                 onClick={() => {
                   setSelectedModel(null);
                   setSelectedJobId(null);
+                  setSelectedMask(null);
                 }}
                 className="rounded-full bg-black/50 p-2 text-white backdrop-blur-sm transition hover:bg-black/70"
               >
@@ -216,6 +219,26 @@ export default function Gallery({ refreshTrigger }) {
             </div>
             <div className="h-[80vh] w-full">
               <ModelViewer modelUrl={selectedModel} jobId={selectedJobId} />
+            </div>
+            <div className="border-t border-white/5 bg-black/30 p-4 text-sm text-slate-300">
+              {selectedMask ? (
+                <div className="flex items-start gap-4">
+                  <div className="rounded-xl border border-white/10 bg-black/40 p-3 shadow-sm">
+                    <div className="mb-2 text-xs uppercase tracking-wide text-slate-400">SAM Mask Preview</div>
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                    <img
+                      src={selectedMask}
+                      alt="Mask preview"
+                      className="max-h-48 rounded-lg border border-white/5"
+                    />
+                  </div>
+                  <p className="max-w-md text-xs text-slate-500">
+                    Mask is extracted automatically via Segment Anything and used by SAM 3D Objects to guide mesh generation.
+                  </p>
+                </div>
+              ) : (
+                <p className="text-xs text-slate-500">No mask preview available for this job.</p>
+              )}
             </div>
           </div>
         </div>
@@ -231,6 +254,7 @@ function JobCard({ jobId, job, onView }) {
   const [format, setFormat] = useState(defaultFormat || "obj");
   const [downloading, setDownloading] = useState(false);
   const [localError, setLocalError] = useState(null);
+  const [previewing, setPreviewing] = useState(false);
   const { apiKey } = useAuth();
 
   useEffect(() => {
@@ -265,17 +289,29 @@ function JobCard({ jobId, job, onView }) {
   };
 
   const handleView = async () => {
-    if (!ready) return;
+    if (!ready || previewing) return;
     if (!apiKey) {
       setLocalError("API key required to preview.");
       return;
     }
+    setPreviewing(true);
     try {
       const blob = await downloadMesh(jobId, format, apiKey);
-      const url = URL.createObjectURL(blob);
-      onView(url);
+      const modelUrl = URL.createObjectURL(blob);
+      let maskUrl = null;
+      if (job.has_mask) {
+        try {
+          const maskBlob = await downloadMask(jobId, apiKey);
+          maskUrl = URL.createObjectURL(maskBlob);
+        } catch (maskErr) {
+          console.warn("Mask preview failed", maskErr);
+        }
+      }
+      onView({ modelUrl, maskUrl });
     } catch (err) {
       setLocalError(err?.status === 401 ? "Unauthorized" : err?.message || "Preview failed");
+    } finally {
+      setPreviewing(false);
     }
   };
 
@@ -343,9 +379,9 @@ function JobCard({ jobId, job, onView }) {
             onClick={handleView}
             disabled={!ready}
             className="rounded-lg p-2 text-slate-400 transition hover:bg-white/5 hover:text-white disabled:opacity-30"
-            title="View 3D Model"
+            title={job.has_mask ? "View mask + model" : "View 3D Model"}
           >
-            <Eye className="h-4 w-4" />
+            <Eye className={`h-4 w-4 ${previewing ? "animate-pulse" : ""}`} />
           </button>
           <button
             onClick={handleDownload}
