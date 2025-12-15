@@ -4,6 +4,8 @@
 
 Transform real objects into clean 3D models ready for Rhino, Blender, Fusion 360, AutoCAD and more.
 
+👉 需要中文说明？请查看 [《SAM3D 应用仓库说明》](docs/README_zh.md)，包含运行步骤、环境依赖与主要 API。
+
 ---
 
 ## **Overview**
